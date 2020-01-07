@@ -155,9 +155,20 @@ def generate(model_path='app/pretrained/model-29',
             for stroke in split_strokes(cumsum(np.array(coords))):
                 plt.plot(stroke[:, 0], -stroke[:, 1], color='black')
             ax.set_aspect('equal')
-            plt.axis('off')
+
+            # custom color
+            ax.spines['bottom'].set_color('red')
+            ax.spines['top'].set_color('red')
+            ax.spines['right'].set_color('red')
+            ax.spines['left'].set_color('red')
+
+            # empty axis
+            plt.xticks([])
+            plt.yticks([])
+
             fig.savefig(f'app/imgs/{filename}.png', transparent=True)   # save the figure to file
             plt.close(fig)
+
 
 
             if text is not None:
