@@ -1,9 +1,9 @@
-from flask import jsonify, request, send_file
+from flask import jsonify, request, send_file, g
 from app import app
 from app.random_string import RandomString
 from app.generate import generate
 
-
+image_names = []
 @app.route("/api/generate", methods=["POST"])
 def generate_text():
     text_from_user = request.form["text_from_user"]
@@ -13,7 +13,7 @@ def generate_text():
     obj_random_string = RandomString(20)
     obj_random_string.generate_random_string()
     image_name = obj_random_string.get_image_name()
-    print(image_name)
+    image_names.append(image_name)
 
     generate(text=text_from_user, filename=image_name,
              style=style_from_user, bias=1., force=False)
@@ -27,8 +27,8 @@ def generate_text():
 
 @app.route("/api/get_last", methods=["GET"])
 def get_last():
-    filename = f'imgs/{image_name}.png'
-    return send_file(filename, mimetype='image/gif')
+    filename = f'{image_names.pop()}.png'
+    return send_file(f'imgs/{filename}', mimetype='image/gif')
 
 
 @app.route("/api/get/<filename>", methods=["GET"])
