@@ -16,7 +16,7 @@ def generate_text():
     print(f'image_name from api {image_name}')
 
     generate(text=text_from_user, filename=image_name,
-             style=style_from_user, bias=1., force=False)
+             w_style=style_from_user, w_bias=1.)
 
     return jsonify({
         "text_from_user": text_from_user,

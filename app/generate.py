@@ -1,13 +1,21 @@
 import os
 import pickle
+import argparse
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.mlab as mlab
-from matplotlib import animation
-import seaborn
 from collections import namedtuple
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--model', dest='model_path', type=str, default='app/pretrained/model-29')
+parser.add_argument('--text', dest='text', type=str, default=None)
+parser.add_argument('--style', dest='style', type=int, default=None)
+parser.add_argument('--bias', dest='bias', type=float, default=1.)
+parser.add_argument('--force', dest='force', action='store_true', default=False)
+parser.add_argument('--info', dest='info', action='store_true', default=False)
+args = parser.parse_args()
 
 
 def sample(e, mu1, mu2, std1, std2, rho):
@@ -36,7 +44,7 @@ def cumsum(points):
     return np.concatenate([sums, points[:, 2:]], axis=1)
 
 
-def sample_text(sess, args_text, translation, style=None, bias=None, force=None):
+def sample_text(sess, args_text, translation, style=None):
     fields = ['coordinates', 'sequence', 'bias', 'e', 'pi', 'mu1', 'mu2', 'std1', 'std2',
               'rho', 'window', 'kappa', 'phi', 'finish', 'zero_states']
     vs = namedtuple('Params', fields)(
@@ -79,7 +87,7 @@ def sample_text(sess, args_text, translation, style=None, bias=None, force=None)
                                               feed_dict={
                                                   vs.coordinates: coord[None, None, ...],
                                                   vs.sequence: sequence_prime if is_priming else sequence,
-                                                  vs.bias: bias
+                                                  vs.bias: args.bias
                                               })
 
         if is_priming:
@@ -97,7 +105,7 @@ def sample_text(sess, args_text, translation, style=None, bias=None, force=None)
             coords += [coord]
             stroke_data += [[mu1[0, g], mu2[0, g], std1[0, g], std2[0, g], rho[0, g], coord[2]]]
 
-            if not force and finish[0, 0] > 0.8:
+            if not args.force and finish[0, 0] > 0.8:
                 print('\nFinished sampling!\n')
                 break
 
@@ -107,12 +115,8 @@ def sample_text(sess, args_text, translation, style=None, bias=None, force=None)
     return phi_data, window_data, kappa_data, stroke_data, coords
 
 
-def generate(model_path='app/pretrained/model-29',
-        text=None,
-        filename=None,
-        style=None,
-        bias=None,
-        force=None):
+def generate(text, filename, w_style, w_bias):
+    my_path = os.path.dirname(os.path.abspath(__file__))
     with open('app/data/translation.pkl', 'rb') as file:
         translation = pickle.load(file)
     rev_translation = {v: k for k, v in translation.items()}
@@ -123,34 +127,74 @@ def generate(model_path='app/pretrained/model-29',
         device_count={'GPU': 0}
     )
     with tf.compat.v1.Session(config=config) as sess:
-        saver = tf.compat.v1.train.import_meta_graph(model_path + '.meta')
-        saver.restore(sess, model_path)
-
-        while True:
-            if text is not None:
-                args_text = text
-            else:
-                args_text = input('What to generate: ')
-
+        saver = tf.compat.v1.train.import_meta_graph(args.model_path + '.meta')
+        saver.restore(sess, args.model_path)
+        args_text = text
+        style = None
+        w_style = int(w_style)
+        args.bias = w_bias
+        if w_style != 404:
+            args.style = w_style
+        if args.style is not None:
             style = None
-            if style is not None:
-                style = None
-                with open('app/data/styles.pkl', 'rb') as file:
-                    styles = pickle.load(file)
+            with open('app/data/styles.pkl', 'rb') as file:
+                styles = pickle.load(file)
 
-                if style > len(styles[0]):
-                    raise ValueError('Requested style is not in style list')
+            if args.style > len(styles[0]):
+                raise ValueError('Requested style is not in style list')
 
-                style = [styles[0][style], styles[1][style]]
+            style = [styles[0][args.style], styles[1][args.style]]
 
-            phi_data, window_data, kappa_data, stroke_data, coords = sample_text(sess, args_text, translation, style, bias)
-            strokes = np.array(stroke_data)
-            epsilon = 1e-8
-            strokes[:, :2] = np.cumsum(strokes[:, :2], axis=0)
-            minx, maxx = np.min(strokes[:, 0]), np.max(strokes[:, 0])
-            miny, maxy = np.min(strokes[:, 1]), np.max(strokes[:, 1])
+        phi_data, window_data, kappa_data, stroke_data, coords = sample_text(sess, args_text, translation, style)
 
+        strokes = np.array(stroke_data)
+        epsilon = 1e-8
+        strokes[:, :2] = np.cumsum(strokes[:, :2], axis=0)
+        minx, maxx = np.min(strokes[:, 0]), np.max(strokes[:, 0])
+        miny, maxy = np.min(strokes[:, 1]), np.max(strokes[:, 1])
 
+        if args.info:
+            delta = abs(maxx - minx) / 400.
+            x = np.arange(minx, maxx, delta)
+            y = np.arange(miny, maxy, delta)
+            x_grid, y_grid = np.meshgrid(x, y)
+            z_grid = np.zeros_like(x_grid)
+            for i in range(strokes.shape[0]):
+                gauss = mlab.bivariate_normal(x_grid, y_grid, mux=strokes[i, 0], muy=strokes[i, 1],
+                                                sigmax=strokes[i, 2], sigmay=strokes[i, 3],
+                                                sigmaxy=0.)  # strokes[i, 4]
+                z_grid += gauss * np.power(strokes[i, 2] + strokes[i, 3], 0.4) / (np.max(gauss) + epsilon)
+
+            fig, ax = plt.subplots(2, 2)
+
+            ax[0, 0].imshow(z_grid, interpolation='bilinear', aspect='auto', cmap=cm.jet)
+            ax[0, 0].grid(False)
+            ax[0, 0].set_title('Densities')
+            ax[0, 0].set_aspect('equal')
+
+            for stroke in split_strokes(cumsum(np.array(coords))):
+                ax[0, 1].plot(stroke[:, 0], -stroke[:, 1])
+            ax[0, 1].set_title('Handwriting')
+            ax[0, 1].set_aspect('equal')
+
+            phi_img = np.vstack(phi_data).T[::-1, :]
+            ax[1, 0].imshow(phi_img, interpolation='nearest', aspect='auto', cmap=cm.jet)
+            ax[1, 0].set_yticks(np.arange(0, len(args_text) + 1))
+            ax[1, 0].set_yticklabels(list(' ' + args_text[::-1]), rotation='vertical', fontsize=8)
+            ax[1, 0].grid(False)
+            ax[1, 0].set_title('Phi')
+
+            window_img = np.vstack(window_data).T
+            ax[1, 1].imshow(window_img, interpolation='nearest', aspect='auto', cmap=cm.jet)
+            ax[1, 1].set_yticks(np.arange(0, len(charset)))
+            ax[1, 1].set_yticklabels(list(charset), rotation='vertical', fontsize=8)
+            ax[1, 1].grid(False)
+            ax[1, 1].set_title('Window')
+
+            print("Saving image..")
+            plt.savefig(my_path + '/static/results/sample.png')
+
+        else:
             fig, ax = plt.subplots(1, 1)
             for stroke in split_strokes(cumsum(np.array(coords))):
                 plt.plot(stroke[:, 0], -stroke[:, 1], color='black')
@@ -166,10 +210,14 @@ def generate(model_path='app/pretrained/model-29',
             plt.xticks([])
             plt.yticks([])
 
+            print("Saving image..")
+            if not os.path.exists('app/imgs'):
+                os.mkdir('app/imgs')
+
             fig.savefig(f'app/imgs/{filename}.png', transparent=True)   # save the figure to file
             plt.close(fig)
 
-
-
-            if text is not None:
-                break
+        """
+        if args.text is not None:
+            break
+        """
